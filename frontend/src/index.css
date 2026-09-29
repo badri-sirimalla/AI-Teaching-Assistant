@@ -1,0 +1,55 @@
+:root {
+  --paper: #faf7f0;
+  --card: #ffffff;
+  --ink: #1d2b3a;
+  --ink-soft: #5c6b78;
+  --rule: #ded6c4;
+  --accent: #2f5d50;
+  --accent-soft: #e7efec;
+  --highlight: #e8a33d;
+  --highlight-soft: #fbeed9;
+  --danger: #b3423e;
+  --danger-soft: #f6e6e5;
+
+  --font-serif: "Source Serif 4", Georgia, serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button {
+  font-family: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

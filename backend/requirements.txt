@@ -7,6 +7,6 @@ numpy==1.26.4
 pandas==2.2.2
 scikit-learn==1.5.1
 joblib==1.4.2
-openai-whisper==20231117
+openai-whisper
 gunicorn==23.0.0
 setuptools==80.10.2

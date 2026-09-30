@@ -4,6 +4,7 @@ Ollama service.
 Responsibilities:
 - Create embeddings using Ollama.
 - Generate short factual answers using Ollama.
+- Check Ollama availability.
 - Disable Qwen thinking output.
 - Prevent reasoning/meta text from reaching the frontend.
 
@@ -42,17 +43,13 @@ SESSION = requests.Session()
 # PERFORMANCE SETTINGS
 # =========================================================
 
-# Do not send an extremely large number of texts in one request.
-# For your current project, 4 is a safe starting point.
+# Number of texts sent to Ollama per embedding request.
 EMBED_BATCH_SIZE = 4
 
-# Maximum characters used for one chunk during embedding.
+# Maximum characters sent to the embedding model for one chunk.
 #
 # This does NOT modify the stored transcript.
 # It only limits the text sent to the embedding model.
-#
-# 2500 characters is normally more than enough for your merged
-# transcript chunks while keeping embedding inference manageable.
 EMBED_MAX_CHARS = 2500
 
 # Embedding requests can be slow on CPU.
@@ -67,12 +64,46 @@ GENERATE_TIMEOUT = 180
 # =========================================================
 
 def _ollama_url(endpoint: str) -> str:
+    """
+    Build the complete Ollama API URL.
+    """
     base_url = str(
         Config.OLLAMA_URL
     ).rstrip("/")
 
     return f"{base_url}{endpoint}"
 
+
+# =========================================================
+# HEALTH CHECK
+# =========================================================
+
+def health_check() -> bool:
+    """
+    Check whether Ollama is reachable.
+
+    Ollama exposes /api/tags for listing installed models.
+    A successful response means the Ollama server is reachable.
+
+    Returns:
+        True  -> Ollama is reachable.
+        False -> Ollama is unavailable or unreachable.
+    """
+    try:
+        response = SESSION.get(
+            _ollama_url("/api/tags"),
+            timeout=10,
+        )
+
+        return response.status_code == 200
+
+    except requests.RequestException:
+        return False
+
+
+# =========================================================
+# EMBEDDING TEXT PREPARATION
+# =========================================================
 
 def _prepare_embedding_text(text):
     """
@@ -85,7 +116,9 @@ def _prepare_embedding_text(text):
       is necessary.
     """
 
-    text = str(text or "").strip()
+    text = str(
+        text or ""
+    ).strip()
 
     if not text:
         return ""
@@ -109,6 +142,10 @@ def _prepare_embedding_text(text):
         + text[-last_part:]
     )
 
+
+# =========================================================
+# BATCH HELPER
+# =========================================================
 
 def _split_batches(items, batch_size):
     """
@@ -140,7 +177,6 @@ def create_embedding(texts):
         create_embedding(["text1", "text2"])
 
     Returns one embedding for every non-empty input text.
-
     The order of returned embeddings is preserved.
     """
 
@@ -151,10 +187,7 @@ def create_embedding(texts):
         return []
 
     # -----------------------------------------------------
-    # Preserve the original ordering.
-    #
-    # We filter empty texts here because Ollama should not
-    # receive empty embedding inputs.
+    # Prepare texts.
     # -----------------------------------------------------
 
     prepared_texts = []
@@ -179,6 +212,10 @@ def create_embedding(texts):
 
     if not prepared_texts:
         return []
+
+    # -----------------------------------------------------
+    # Performance tracking.
+    # -----------------------------------------------------
 
     total_start = time.perf_counter()
 
@@ -215,6 +252,10 @@ def create_embedding(texts):
         f"{Config.OLLAMA_EMBED_MODEL}"
     )
 
+    # -----------------------------------------------------
+    # Process batches.
+    # -----------------------------------------------------
+
     for batch_number, batch in enumerate(
         batches,
         start=1,
@@ -238,16 +279,12 @@ def create_embedding(texts):
                     "model": (
                         Config.OLLAMA_EMBED_MODEL
                     ),
-
                     "input": batch,
 
-                    # Keep the embedding model loaded
-                    # between batches.
+                    # Keep embedding model loaded.
                     "keep_alive": "10m",
 
-                    # Do not silently discard long
-                    # input. We already control the
-                    # text length ourselves.
+                    # We control the text length ourselves.
                     "truncate": False,
                 },
                 timeout=EMBED_TIMEOUT,
@@ -266,6 +303,10 @@ def create_embedding(texts):
             - batch_start
         )
 
+        # -------------------------------------------------
+        # HTTP error.
+        # -------------------------------------------------
+
         if response.status_code != 200:
 
             raise OllamaError(
@@ -273,6 +314,10 @@ def create_embedding(texts):
                 f"{response.status_code}: "
                 f"{response.text}"
             )
+
+        # -------------------------------------------------
+        # JSON parsing.
+        # -------------------------------------------------
 
         try:
 
@@ -284,6 +329,10 @@ def create_embedding(texts):
                 "Ollama returned invalid JSON "
                 "for embeddings."
             ) from exc
+
+        # -------------------------------------------------
+        # Extract embeddings.
+        # -------------------------------------------------
 
         embeddings = data.get(
             "embeddings"
@@ -319,6 +368,10 @@ def create_embedding(texts):
             f"completed in "
             f"{batch_elapsed:.2f}s"
         )
+
+    # -----------------------------------------------------
+    # Total time.
+    # -----------------------------------------------------
 
     total_elapsed = (
         time.perf_counter()
@@ -443,6 +496,7 @@ def _remove_references(text):
             )
 
     if positions:
+
         text = text[
             :min(positions)
         ]
@@ -536,6 +590,7 @@ def _remove_reasoning(text):
     )
 
     reasoning_found = False
+
     useful_lines = []
 
     for line in lines:
@@ -547,6 +602,7 @@ def _remove_reasoning(text):
         ):
 
             reasoning_found = True
+
             continue
 
         if (
@@ -558,6 +614,7 @@ def _remove_reasoning(text):
         ):
 
             reasoning_found = True
+
             continue
 
         if reasoning_found:
@@ -569,6 +626,7 @@ def _remove_reasoning(text):
                 "- it is a",
                 "- it's",
             }:
+
                 continue
 
             useful_lines.append(
@@ -747,6 +805,7 @@ def _clean_generated_answer(text):
             ):
 
                 remove = True
+
                 break
 
         if not remove:
@@ -818,11 +877,17 @@ IMPORTANT OUTPUT RULE:
 Return ONLY the final answer.
 
 Do NOT explain your reasoning.
+
 Do NOT analyze the question.
+
 Do NOT say "Okay, so".
+
 Do NOT say "the user is asking".
+
 Do NOT say "I need to".
+
 Do NOT say "we need to".
+
 Do NOT describe what you are doing.
 
 Return the answer in exactly this format:
@@ -832,7 +897,6 @@ Return the answer in exactly this format:
 
     payload = {
         "model": Config.OLLAMA_GENERATE_MODEL,
-
         "prompt": generation_prompt,
 
         # Disable Qwen thinking.
@@ -877,6 +941,10 @@ Return the answer in exactly this format:
         - start_time
     )
 
+    # -----------------------------------------------------
+    # HTTP error.
+    # -----------------------------------------------------
+
     if response.status_code != 200:
 
         raise OllamaError(
@@ -884,6 +952,10 @@ Return the answer in exactly this format:
             f"{response.status_code}: "
             f"{response.text}"
         )
+
+    # -----------------------------------------------------
+    # JSON parsing.
+    # -----------------------------------------------------
 
     try:
 
@@ -911,6 +983,10 @@ Return the answer in exactly this format:
             "[OLLAMA] Thinking field returned; "
             "ignored."
         )
+
+    # -----------------------------------------------------
+    # Get final response.
+    # -----------------------------------------------------
 
     raw_answer = data.get(
         "response",
